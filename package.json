@@ -1,0 +1,59 @@
+{
+  "name": "react-native-requests-inspector",
+  "version": "1.0.0",
+  "description": "High-performance In-App Network Inspector for React Native with cURL export, 1-click token extraction, smart filtering, and zero native overhead.",
+  "main": "lib/index.js",
+  "module": "lib/index.js",
+  "react-native": "src/index.tsx",
+  "source": "src/index.tsx",
+  "types": "lib/index.d.ts",
+  "files": [
+    "src",
+    "lib",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tuan1996v2/react-native-requests-inspector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tuan1996v2/react-native-requests-inspector/issues"
+  },
+  "homepage": "https://github.com/tuan1996v2/react-native-requests-inspector#readme",
+  "keywords": [
+    "react-native",
+    "requests-inspector",
+    "react-native-requests-inspector",
+    "network-logger",
+    "network-inspector",
+    "in-app-inspector",
+    "axios-interceptor",
+    "fetch-interceptor",
+    "curl",
+    "chucker",
+    "debugging"
+  ],
+  "author": "tuan1996v2",
+  "license": "MIT",
+  "dependencies": {
+    "zustand": "^5.0.0"
+  },
+  "peerDependencies": {
+    "axios": "^1.0.0",
+    "react": ">=18.0.0",
+    "react-native": ">=0.70.0",
+    "react-native-gesture-handler": ">=2.0.0",
+    "react-native-reanimated": ">=3.0.0",
+    "react-native-safe-area-context": ">=4.0.0",
+    "react-native-svg": ">=13.0.0"
+  },
+  "peerDependenciesMeta": {
+    "axios": {
+      "optional": true
+    }
+  }
+}
