@@ -1,10 +1,22 @@
 import React, { FC, useCallback, useMemo, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  ScrollView,
+  StyleProp,
+  StyleSheet,
+  Text,
+  TextStyle,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 import { copyToClipboard, extractAuthToken } from '../clipboardHelper';
 import { generateCurlCommand } from '../curlHelper';
+import { useNetworkStore } from '../networkStore';
 import { NetworkLog } from '../types';
+import { formatAndRedactLog, tryParseJson } from '../utils/redact';
 import { fs, ms, s, vs } from '../utils/responsive';
+import { parseQueryParams } from '../utils/url';
 import { ChevronLeftIcon, CopyIcon, KeyIcon } from './Icons';
 
 interface RequestDetailViewProps {
@@ -14,33 +26,58 @@ interface RequestDetailViewProps {
 
 type DetailTab = 'REQUEST' | 'RESPONSE' | 'CURL';
 
+// A single <Text> with hundreds of KB freezes layout (notably on Android). Show a preview only;
+// copy actions still use the full content.
+const MAX_DISPLAY_CHARS = 50 * 1024;
+
 const safeFormatJson = (data: unknown): string => {
-  if (data === undefined || data === null) {
+  if (data === undefined || data === null || data === '') {
     return 'Empty';
   }
-  if (typeof data === 'string') {
-    try {
-      const parsed = JSON.parse(data);
-      return JSON.stringify(parsed, null, 2);
-    } catch {
-      return data;
-    }
+  const parsed = tryParseJson(data);
+  if (typeof parsed === 'string') {
+    return parsed;
   }
   try {
-    return JSON.stringify(data, null, 2);
+    return JSON.stringify(parsed, null, 2);
   } catch {
-    return String(data);
+    return String(parsed);
   }
+};
+
+const ClippedText: FC<{ text: string; style: StyleProp<TextStyle> }> = ({ text, style }) => {
+  const isClipped = text.length > MAX_DISPLAY_CHARS;
+  return (
+    <>
+      <Text selectable style={style}>
+        {isClipped ? text.slice(0, MAX_DISPLAY_CHARS) : text}
+      </Text>
+      {isClipped ? (
+        <Text style={styles.clippedNotice}>
+          {`… Preview limited to ${Math.round(MAX_DISPLAY_CHARS / 1024)}KB of ${Math.round(
+            text.length / 1024,
+          )}KB. Use Copy to get the full content.`}
+        </Text>
+      ) : null}
+    </>
+  );
 };
 
 export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) => {
   const [activeTab, setActiveTab] = useState<DetailTab>('RESPONSE');
+  const redactKeys = useNetworkStore(state => state.redactKeys);
+  const responseFormatter = useNetworkStore(state => state.responseFormatter);
 
-  const curlCommand = useMemo(() => generateCurlCommand(log), [log]);
+  const displayLog = useMemo(
+    () => formatAndRedactLog(log, redactKeys, responseFormatter),
+    [log, redactKeys, responseFormatter],
+  );
+
+  const curlCommand = useMemo(() => generateCurlCommand(displayLog), [displayLog]);
 
   const authToken = useMemo(
-    () => extractAuthToken(log.headers) || extractAuthToken(log.response?.headers),
-    [log.headers, log.response?.headers],
+    () => extractAuthToken(displayLog.headers) || extractAuthToken(displayLog.response?.headers),
+    [displayLog.headers, displayLog.response?.headers],
   );
 
   const handleCopyCurl = useCallback(async () => {
@@ -67,11 +104,20 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
     }
   }, []);
 
-  const formattedRequestBody = useMemo(() => safeFormatJson(log.body), [log.body]);
+  const formattedRequestBody = useMemo(() => safeFormatJson(displayLog.body), [displayLog.body]);
 
   const formattedResponseBody = useMemo(
-    () => safeFormatJson(log.response?.body),
-    [log.response?.body],
+    () => safeFormatJson(displayLog.response?.body),
+    [displayLog.response?.body],
+  );
+
+  // Global XHR/fetch logs carry params inside the URL; derive them lazily for display only
+  const queryParams = useMemo(
+    () =>
+      displayLog.queryParameters && Object.keys(displayLog.queryParameters).length > 0
+        ? displayLog.queryParameters
+        : parseQueryParams(displayLog.url),
+    [displayLog.queryParameters, displayLog.url],
   );
 
   return (
@@ -114,10 +160,10 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
       <View style={styles.urlBanner}>
         <View style={styles.urlRow}>
           <View style={styles.methodPill}>
-            <Text style={styles.methodPillText}>{log.method}</Text>
+            <Text style={styles.methodPillText}>{displayLog.method}</Text>
           </View>
           <Text numberOfLines={2} style={styles.urlText}>
-            {log.url}
+            {displayLog.url}
           </Text>
         </View>
       </View>
@@ -160,8 +206,8 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
               <Text style={styles.sectionTitle}>Request Headers</Text>
             </View>
             <View style={styles.card}>
-              {log.headers && Object.keys(log.headers).length > 0 ? (
-                Object.entries(log.headers).map(([k, v]) => (
+              {displayLog.headers && Object.keys(displayLog.headers).length > 0 ? (
+                Object.entries(displayLog.headers).map(([k, v]) => (
                   <TouchableOpacity
                     activeOpacity={0.7}
                     key={k}
@@ -176,13 +222,13 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
               )}
             </View>
 
-            {log.queryParameters && Object.keys(log.queryParameters).length > 0 ? (
+            {queryParams && Object.keys(queryParams).length > 0 ? (
               <View>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Query Parameters</Text>
                 </View>
                 <View style={styles.card}>
-                  {Object.entries(log.queryParameters).map(([k, v]) => (
+                  {Object.entries(queryParams).map(([k, v]) => (
                     <View key={k} style={styles.keyValueRow}>
                       <Text style={styles.keyText}>{k}:</Text>
                       <Text style={styles.valText}>{String(v)}</Text>
@@ -204,9 +250,7 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
               ) : null}
             </View>
             <View style={styles.card}>
-              <Text selectable style={styles.codeText}>
-                {formattedRequestBody}
-              </Text>
+              <ClippedText style={styles.codeText} text={formattedRequestBody} />
             </View>
           </View>
         )}
@@ -217,21 +261,24 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
               <View style={styles.statusBadgeRow}>
                 <Text style={styles.statusLabel}>Status:</Text>
                 <Text style={styles.statusVal}>
-                  {log.response?.statusCode ?? (log.status === 'pending' ? 'Pending' : 'Error')}
+                  {displayLog.response?.statusCode ??
+                    (displayLog.status === 'pending' ? 'Pending' : 'Error')}
                 </Text>
               </View>
               <View style={styles.statusBadgeRow}>
                 <Text style={styles.statusLabel}>Duration:</Text>
                 <Text style={styles.statusVal}>
-                  {log.response?.durationMs !== undefined ? `${log.response.durationMs} ms` : '...'}
+                  {displayLog.response?.durationMs !== undefined
+                    ? `${displayLog.response.durationMs} ms`
+                    : '...'}
                 </Text>
               </View>
             </View>
 
-            {log.response?.error ? (
+            {displayLog.response?.error ? (
               <View style={styles.errorBanner}>
                 <Text style={styles.errorBannerTitle}>Error Details</Text>
-                <Text style={styles.errorBannerText}>{log.response.error}</Text>
+                <Text style={styles.errorBannerText}>{displayLog.response.error}</Text>
               </View>
             ) : null}
 
@@ -239,8 +286,9 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
               <Text style={styles.sectionTitle}>Response Headers</Text>
             </View>
             <View style={styles.card}>
-              {log.response?.headers && Object.keys(log.response.headers).length > 0 ? (
-                Object.entries(log.response.headers).map(([k, v]) => (
+              {displayLog.response?.headers &&
+              Object.keys(displayLog.response.headers).length > 0 ? (
+                Object.entries(displayLog.response.headers).map(([k, v]) => (
                   <TouchableOpacity
                     activeOpacity={0.7}
                     key={k}
@@ -267,9 +315,7 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
               ) : null}
             </View>
             <View style={styles.card}>
-              <Text selectable style={styles.codeText}>
-                {formattedResponseBody}
-              </Text>
+              <ClippedText style={styles.codeText} text={formattedResponseBody} />
             </View>
           </View>
         )}
@@ -281,9 +327,7 @@ export const RequestDetailView: FC<RequestDetailViewProps> = ({ log, onBack }) =
             </View>
 
             <View style={styles.codeBox}>
-              <Text selectable style={styles.curlText}>
-                {curlCommand}
-              </Text>
+              <ClippedText style={styles.curlText} text={curlCommand} />
             </View>
 
             <TouchableOpacity
@@ -320,6 +364,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: vs(12),
     padding: ms(12),
+  },
+  clippedNotice: {
+    color: '#FBBF24',
+    fontSize: fs(11),
+    fontStyle: 'italic',
+    marginTop: vs(8),
   },
   codeBox: {
     backgroundColor: '#18181B',

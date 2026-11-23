@@ -1,33 +1,28 @@
 import { NetworkLog } from './types';
 
+/** POSIX-safe single-quote escaping: prevents `$`, backticks and `!` from being expanded. */
+const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+
 export const generateCurlCommand = (log: NetworkLog): string => {
   let url = log.url;
 
-  // Append query parameters if any and not already in URL
   if (log.queryParameters && Object.keys(log.queryParameters).length > 0) {
-    const hasQuery = url.includes('?');
     const queryString = Object.entries(log.queryParameters)
       .map(([key, val]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(val ?? ''))}`)
       .join('&');
-
-    if (!hasQuery) {
-      url = `${url}?${queryString}`;
-    }
+    url = `${url}${url.includes('?') ? '&' : '?'}${queryString}`;
   }
 
-  const parts: string[] = [`curl -X ${log.method.toUpperCase()} "${url}"`];
+  const parts: string[] = [`curl -X ${log.method.toUpperCase()} ${shellQuote(url)}`];
 
-  // Headers
   if (log.headers) {
     Object.entries(log.headers).forEach(([key, value]) => {
       if (value !== undefined && value !== null) {
-        const sanitizedValue = String(value).replace(/"/g, '\\"');
-        parts.push(`  -H "${key}: ${sanitizedValue}"`);
+        parts.push(`  -H ${shellQuote(`${key}: ${String(value)}`)}`);
       }
     });
   }
 
-  // Body
   if (
     log.body !== undefined &&
     log.body !== null &&
@@ -46,9 +41,8 @@ export const generateCurlCommand = (log: NetworkLog): string => {
     }
 
     if (bodyString) {
-      // Escape single quotes for bash safe argument
-      const escapedBody = bodyString.replace(/'/g, "'\\''");
-      parts.push(`  --data '${escapedBody}'`);
+      // --data-raw avoids curl interpreting a leading "@" as a file path
+      parts.push(`  --data-raw ${shellQuote(bodyString)}`);
     }
   }
 

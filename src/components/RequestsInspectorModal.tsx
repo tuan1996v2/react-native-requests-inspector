@@ -11,11 +11,10 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-
 import { copyToClipboard, extractAuthToken } from '../clipboardHelper';
 import { useNetworkStore } from '../networkStore';
 import { FilterType, NetworkLog } from '../types';
+import { formatAndRedactLog } from '../utils/redact';
 import { fs, ms, s, vs } from '../utils/responsive';
 import { useSafeDeviceInsets } from '../utils/safeArea';
 import {
@@ -54,6 +53,8 @@ const ModalContent: FC = () => {
   const setVisible = useNetworkStore(state => state.setModalVisible);
   const isPaused = useNetworkStore(state => state.isPaused);
   const togglePause = useNetworkStore(state => state.togglePause);
+  const redactKeys = useNetworkStore(state => state.redactKeys);
+  const responseFormatter = useNetworkStore(state => state.responseFormatter);
 
   const insets = useSafeDeviceInsets();
 
@@ -102,7 +103,8 @@ const ModalContent: FC = () => {
   }, [logs, filter, searchQuery]);
 
   const handleCopyLatestToken = useCallback(async () => {
-    for (const log of logs) {
+    for (const rawLog of logs) {
+      const log = formatAndRedactLog(rawLog, redactKeys);
       const token = extractAuthToken(log.headers) || extractAuthToken(log.response?.headers);
       if (token) {
         const success = await copyToClipboard(token);
@@ -113,7 +115,7 @@ const ModalContent: FC = () => {
       }
     }
     Alert.alert('No Token Found', 'No authorization header detected in recorded requests.');
-  }, [logs]);
+  }, [logs, redactKeys]);
 
   const handleExportLogs = useCallback(async () => {
     if (logs.length === 0) {
@@ -121,19 +123,22 @@ const ModalContent: FC = () => {
       return;
     }
 
-    const exportData = logs.map(log => ({
-      id: log.id,
-      method: log.method,
-      url: log.url,
-      status: log.response?.statusCode ?? (log.status === 'pending' ? 'PENDING' : 'ERROR'),
-      durationMs: log.response?.durationMs,
-      sentTime: new Date(log.sentTime).toISOString(),
-      headers: log.headers,
-      body: log.body,
-      responseHeaders: log.response?.headers,
-      responseBody: log.response?.body,
-      error: log.response?.error,
-    }));
+    const exportData = logs.map(rawLog => {
+      const log = formatAndRedactLog(rawLog, redactKeys, responseFormatter);
+      return {
+        id: log.id,
+        method: log.method,
+        url: log.url,
+        status: log.response?.statusCode ?? (log.status === 'pending' ? 'PENDING' : 'ERROR'),
+        durationMs: log.response?.durationMs,
+        sentTime: new Date(log.sentTime).toISOString(),
+        headers: log.headers,
+        body: log.body,
+        responseHeaders: log.response?.headers,
+        responseBody: log.response?.body,
+        error: log.response?.error,
+      };
+    });
 
     const jsonString = JSON.stringify(exportData, null, 2);
     const success = await copyToClipboard(jsonString);
@@ -143,7 +148,7 @@ const ModalContent: FC = () => {
         `Successfully exported ${logs.length} request logs and copied JSON dump to clipboard!`,
       );
     }
-  }, [logs]);
+  }, [logs, redactKeys, responseFormatter]);
 
   const handleClose = useCallback(() => {
     setSelectedLogId(null);
@@ -161,7 +166,7 @@ const ModalContent: FC = () => {
 
   return (
     <View style={[styles.safeArea, safeContainerStyle]}>
-      <StatusBar backgroundColor="#121212" barStyle="light-content" translucent />
+      <StatusBar barStyle="light-content" />
       {selectedLog ? (
         <RequestDetailView log={selectedLog} onBack={() => setSelectedLogId(null)} />
       ) : (
@@ -376,9 +381,7 @@ export const RequestsInspectorModal: FC = () => {
       onRequestClose={handleHardwareBack}
       statusBarTranslucent
       visible={isVisible}>
-      <SafeAreaProvider>
-        <ModalContent />
-      </SafeAreaProvider>
+      <ModalContent />
     </Modal>
   );
 };

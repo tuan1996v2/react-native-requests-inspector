@@ -1,97 +1,144 @@
-import React, { FC, useCallback, useMemo } from 'react';
-import { Dimensions, StyleSheet, Text, View } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
+import React, { FC, useCallback, useEffect, useRef } from 'react';
+import { Animated, PanResponder, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { useNetworkStore } from '../networkStore';
 import { fs, ms, s, vs } from '../utils/responsive';
 import { useSafeDeviceInsets } from '../utils/safeArea';
 import { NetworkIcon } from './Icons';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-
 const BUTTON_SIZE = s(54);
+// Matches platform touch slop (~8-10dp) so a slightly shaky tap still opens the inspector
+const TAP_THRESHOLD = 10;
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max);
 
 export const FloatingButton: FC = () => {
   const isEnabled = useNetworkStore(state => state.isEnabled);
-  const logs = useNetworkStore(state => state.logs);
+  const showFloatingButton = useNetworkStore(state => state.showFloatingButton);
+  const logsCount = useNetworkStore(state => state.logs.length);
+  const hasErrors = useNetworkStore(state => state.logs.some(log => log.status === 'error'));
   const setModalVisible = useNetworkStore(state => state.setModalVisible);
+
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeDeviceInsets();
 
   const minX = insets.left + s(8);
-  const maxX = SCREEN_WIDTH - BUTTON_SIZE - insets.right - s(8);
+  const maxX = Math.max(minX, windowWidth - BUTTON_SIZE - insets.right - s(8));
   const minY = insets.top + vs(6);
-  const maxY = SCREEN_HEIGHT - BUTTON_SIZE - insets.bottom - vs(6);
+  const maxY = Math.max(minY, windowHeight - BUTTON_SIZE - insets.bottom - vs(6));
 
-  const initialY = Math.min(Math.max(SCREEN_HEIGHT * 0.45, minY), maxY);
+  const initialY = clamp(windowHeight * 0.45, minY, maxY);
 
-  const translateX = useSharedValue(maxX);
-  const translateY = useSharedValue(initialY);
-  const prevX = useSharedValue(maxX);
-  const prevY = useSharedValue(initialY);
+  const pan = useRef(new Animated.ValueXY({ x: maxX, y: initialY })).current;
+  const positionRef = useRef({ x: maxX, y: initialY });
+  const dragStartRef = useRef({ x: maxX, y: initialY });
+  const snappedSideRef = useRef<'left' | 'right'>('right');
+  const hasInitializedRef = useRef(false);
+
+  const boundsRef = useRef({ minX, maxX, minY, maxY, windowWidth });
+  boundsRef.current = { minX, maxX, minY, maxY, windowWidth };
 
   const openModal = useCallback(() => {
     setModalVisible(true);
   }, [setModalVisible]);
 
-  const hasErrors = useMemo(() => logs.some(log => log.status === 'error'), [logs]);
+  const openModalRef = useRef(openModal);
+  openModalRef.current = openModal;
 
-  const panGesture = Gesture.Pan()
-    .onStart(() => {
-      prevX.value = translateX.value;
-      prevY.value = translateY.value;
-    })
-    .onUpdate(event => {
-      const nextX = prevX.value + event.translationX;
-      const nextY = prevY.value + event.translationY;
-
-      translateX.value = Math.min(Math.max(nextX, minX), maxX);
-      translateY.value = Math.min(Math.max(nextY, minY), maxY);
-    })
-    .onEnd(() => {
-      const targetX = translateX.value < SCREEN_WIDTH / 2 - BUTTON_SIZE / 2 ? minX : maxX;
-      translateX.value = withSpring(targetX, {
-        damping: 18,
-        stiffness: 140,
-        mass: 0.8,
-      });
+  useEffect(() => {
+    const listenerId = pan.addListener(value => {
+      positionRef.current = value;
     });
+    return () => {
+      pan.removeListener(listenerId);
+    };
+  }, [pan]);
 
-  const tapGesture = Gesture.Tap().onEnd(() => {
-    runOnJS(openModal)();
-  });
+  // Re-clamp & re-snap when screen dimensions or safe area insets change (rotation / iPad split view)
+  useEffect(() => {
+    if (!hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      return;
+    }
+    const targetX = snappedSideRef.current === 'left' ? minX : maxX;
+    const clampedY = clamp(positionRef.current.y, minY, maxY);
+    positionRef.current = { x: targetX, y: clampedY };
+    pan.setValue({ x: targetX, y: clampedY });
+  }, [minX, maxX, minY, maxY, pan]);
 
-  const gesture = Gesture.Exclusive(panGesture, tapGesture);
+  const snapToNearestEdge = useCallback(() => {
+    const bounds = boundsRef.current;
+    const currentX = positionRef.current.x;
+    const snapLeft = currentX < bounds.windowWidth / 2 - BUTTON_SIZE / 2;
+    const targetX = snapLeft ? bounds.minX : bounds.maxX;
+    snappedSideRef.current = snapLeft ? 'left' : 'right';
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-    ] as [{ translateX: number }, { translateY: number }],
-  }));
+    Animated.spring(pan.x, {
+      toValue: targetX,
+      useNativeDriver: true,
+      damping: 18,
+      stiffness: 140,
+      mass: 0.8,
+    }).start();
+  }, [pan.x]);
 
-  if (!isEnabled) {
+  const snapToNearestEdgeRef = useRef(snapToNearestEdge);
+  snapToNearestEdgeRef.current = snapToNearestEdge;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        pan.stopAnimation(value => {
+          positionRef.current = value;
+        });
+        dragStartRef.current = { ...positionRef.current };
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const bounds = boundsRef.current;
+        const nextX = clamp(dragStartRef.current.x + gestureState.dx, bounds.minX, bounds.maxX);
+        const nextY = clamp(dragStartRef.current.y + gestureState.dy, bounds.minY, bounds.maxY);
+        pan.setValue({ x: nextX, y: nextY });
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const isTap =
+          Math.abs(gestureState.dx) < TAP_THRESHOLD && Math.abs(gestureState.dy) < TAP_THRESHOLD;
+
+        if (isTap) {
+          openModalRef.current();
+        }
+
+        snapToNearestEdgeRef.current();
+      },
+      onPanResponderTerminate: () => {
+        snapToNearestEdgeRef.current();
+      },
+    }),
+  ).current;
+
+  if (!isEnabled || !showFloatingButton) {
     return null;
   }
 
   return (
-    <Animated.View style={[styles.floatingContainer, animatedStyle]}>
-      <GestureHandlerRootView style={styles.gestureRoot}>
-        <GestureDetector gesture={gesture}>
-          <View style={styles.floatingButton}>
-            <NetworkIcon color="#60A5FA" size={s(24)} />
-            <View style={styles.countBadge}>
-              <Text style={styles.countText}>{logs.length}</Text>
-            </View>
-            {hasErrors ? <View style={styles.errorDot} /> : null}
-          </View>
-        </GestureDetector>
-      </GestureHandlerRootView>
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[
+        styles.floatingContainer,
+        {
+          transform: [{ translateX: pan.x }, { translateY: pan.y }],
+        },
+      ]}>
+      <View style={styles.floatingButton}>
+        <NetworkIcon color="#60A5FA" size={s(24)} />
+        <View style={styles.countBadge}>
+          <Text style={styles.countText}>{logsCount}</Text>
+        </View>
+        {hasErrors ? <View style={styles.errorDot} /> : null}
+      </View>
     </Animated.View>
   );
 };
@@ -147,9 +194,5 @@ const styles = StyleSheet.create({
     top: 0,
     width: BUTTON_SIZE,
     zIndex: 9999,
-  },
-  gestureRoot: {
-    height: BUTTON_SIZE,
-    width: BUTTON_SIZE,
   },
 });

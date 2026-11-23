@@ -4,5 +4,5 @@ export interface Insets {
     left: number;
     right: number;
 }
-export declare const getDeviceSafeAreaFallback: () => Insets;
+export declare const getDeviceSafeAreaFallback: (windowWidth?: number, windowHeight?: number) => Insets;
 export declare const useSafeDeviceInsets: () => Insets;

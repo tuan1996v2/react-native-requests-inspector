@@ -1,7 +1,9 @@
 import React, { FC, memo, useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
+import { useNetworkStore } from '../networkStore';
 import { NetworkLog } from '../types';
+import { redactUrl } from '../utils/redact';
 import { fs, ms, s, vs } from '../utils/responsive';
 import { WarningIcon } from './Icons';
 
@@ -17,6 +19,9 @@ const formatTime = (timestamp: number): string => {
 };
 
 export const RequestItem: FC<RequestItemProps> = memo(({ log, onPress }) => {
+  const redactKeys = useNetworkStore(state => state.redactKeys);
+  const displayUrl = useMemo(() => redactUrl(log.url, redactKeys), [log.url, redactKeys]);
+
   const methodStyle = useMemo(() => {
     switch (log.method) {
       case 'GET':
@@ -81,7 +86,7 @@ export const RequestItem: FC<RequestItemProps> = memo(({ log, onPress }) => {
 
   const formattedUrl = useMemo(() => {
     try {
-      const parsed = new URL(log.url);
+      const parsed = new URL(displayUrl);
       return {
         host: parsed.host,
         path: parsed.pathname + parsed.search,
@@ -89,10 +94,10 @@ export const RequestItem: FC<RequestItemProps> = memo(({ log, onPress }) => {
     } catch {
       return {
         host: '',
-        path: log.url,
+        path: displayUrl,
       };
     }
-  }, [log.url]);
+  }, [displayUrl]);
 
   return (
     <TouchableOpacity activeOpacity={0.7} onPress={() => onPress(log)} style={styles.cardContainer}>
